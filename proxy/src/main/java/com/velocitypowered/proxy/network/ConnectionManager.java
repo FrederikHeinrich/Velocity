@@ -23,6 +23,7 @@ import static org.asynchttpclient.Dsl.config;
 import com.google.common.base.Preconditions;
 import com.velocitypowered.api.event.proxy.ListenerBoundEvent;
 import com.velocitypowered.api.event.proxy.ListenerCloseEvent;
+import com.velocitypowered.api.event.proxy.ListenerPreBoundEvent;
 import com.velocitypowered.api.network.ListenerType;
 import com.velocitypowered.natives.util.Natives;
 import com.velocitypowered.proxy.VelocityServer;
@@ -111,33 +112,36 @@ public final class ConnectionManager {
    * @param address the address to bind to
    */
   public void bind(final InetSocketAddress address) {
-    final ServerBootstrap bootstrap = new ServerBootstrap()
-        .channelFactory(this.transportType.serverSocketChannelFactory)
-        .group(this.bossGroup, this.workerGroup)
-        .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, SERVER_WRITE_MARK)
-        .childHandler(this.serverChannelInitializer.get())
-        .childOption(ChannelOption.TCP_NODELAY, true)
-        .childOption(ChannelOption.IP_TOS, 0x18)
-        .localAddress(address);
+    server.getEventManager().fire(new ListenerPreBoundEvent(address, ListenerType.MINECRAFT)).thenAccept(event -> {
+      final ServerBootstrap bootstrap = new ServerBootstrap()
+          .channelFactory(this.transportType.serverSocketChannelFactory)
+          .group(this.bossGroup, this.workerGroup)
+          .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, SERVER_WRITE_MARK)
+          .childHandler(this.serverChannelInitializer.get())
+          .childOption(ChannelOption.TCP_NODELAY, true)
+          .childOption(ChannelOption.IP_TOS, 0x18)
+          .localAddress(event.getAddress());
 
-    if (transportType == TransportType.EPOLL && server.getConfiguration().useTcpFastOpen()) {
-      bootstrap.option(EpollChannelOption.TCP_FASTOPEN, 3);
-    }
+      if (transportType == TransportType.EPOLL && server.getConfiguration().useTcpFastOpen()) {
+        bootstrap.option(EpollChannelOption.TCP_FASTOPEN, 3);
+      }
 
-    bootstrap.bind()
-        .addListener((ChannelFutureListener) future -> {
-          final Channel channel = future.channel();
-          if (future.isSuccess()) {
-            this.endpoints.put(address, new Endpoint(channel, ListenerType.MINECRAFT));
-            LOGGER.info("Listening on {}", channel.localAddress());
+      bootstrap.bind()
+          .addListener((ChannelFutureListener) future -> {
+            final Channel channel = future.channel();
+            if (future.isSuccess()) {
+              this.endpoints.put(event.getAddress(), new Endpoint(channel, ListenerType.MINECRAFT));
+              LOGGER.info("Listening on {}", channel.localAddress());
 
-            // Fire the proxy bound event after the socket is bound
-            server.getEventManager().fireAndForget(
-                new ListenerBoundEvent(address, ListenerType.MINECRAFT));
-          } else {
-            LOGGER.error("Can't bind to {}", address, future.cause());
-          }
-        });
+              // Fire the proxy bound event after the socket is bound
+              server.getEventManager().fireAndForget(
+                  new ListenerBoundEvent(event.getAddress(), ListenerType.MINECRAFT));
+            } else {
+              LOGGER.error("Can't bind to {}", event.getAddress(), future.cause());
+            }
+          });
+    });
+    
   }
 
   /**
